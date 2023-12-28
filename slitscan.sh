@@ -5,18 +5,22 @@
 # Default parameters
 VIDEO_FILE="$1"
 IN_TIME=0                  # Start time of the video clip to process, in seconds.
-OUT_TIME=$(ffmpeg -i "$VIDEO_FILE" 2>&1 | grep "Duration" | cut -d ' ' -f 4 | sed s/,//) # End time of the video clip to process, automatically set to video duration.
+OUT_TIME=""                # End time of the video clip to process, to be calculated if not provided.
 IMAGE_WIDTH=1920           # The width of the final image.
 SLIT_NUMBER=120            # The number of slits to extract.
 ORIENTATION="horizontal"   # Orientation of the slits, can be 'horizontal' or 'vertical'.
 OUTPUT_DIR="./slitscan_frames"
-FINAL_IMAGE="slitscan_result.jpg"
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+FINAL_IMAGE="slitscan_result_$TIMESTAMP.jpg"
 
 # Function to calculate frame interval based on video duration and number of slits
 calculate_frame_interval() {
-    DURATION=$(ffmpeg -i "$VIDEO_FILE" 2>&1 | grep "Duration" | cut -d ' ' -f 4 | sed s/,//)
-    END_TIME_IN_SECONDS=$(echo "$DURATION" | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }')
-    FRAME_INTERVAL=$(echo "($END_TIME_IN_SECONDS - $IN_TIME) / $SLIT_NUMBER" | bc -l)
+    # Calculate total duration if OUT_TIME not provided
+    if [ -z "$OUT_TIME" ]; then
+        OUT_TIME=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$VIDEO_FILE")
+        OUT_TIME=${OUT_TIME%.*}  # Convert to integer
+    fi
+    FRAME_INTERVAL=$(echo "scale=2; ($OUT_TIME - $IN_TIME) / $SLIT_NUMBER" | bc)
     echo "$FRAME_INTERVAL"
 }
 
@@ -42,18 +46,17 @@ done
 
 # Calculate the frame interval and total video duration
 FRAME_INTERVAL=$(calculate_frame_interval)
-VIDEO_DURATION=$(echo "$OUT_TIME - $IN_TIME" | bc -l)
 
 # Create output directory if it does not exist
 mkdir -p "$OUTPUT_DIR"
 
 # Extract frames from the video at the calculated interval
-ffmpeg -ss "$IN_TIME" -to "$OUT_TIME" -i "$VIDEO_FILE" -vf "fps=1/${FRAME_INTERVAL}" "$OUTPUT_DIR/frame_%04d.jpg"
+ffmpeg -ss "$IN_TIME" -t "$((OUT_TIME - IN_TIME))" -i "$VIDEO_FILE" -vf "fps=1/${FRAME_INTERVAL}" "$OUTPUT_DIR/frame_%04d.jpg"
 
 # Process each frame to create the slit-scan effect
 FINAL_SLICES=()
 
-for FRAME in "$OUTPUT_DIR"/frame_*.jpg; do
+for FRAME in $(ls "$OUTPUT_DIR"/frame_*.jpg | sort -V); do
     SLIT="${FRAME%.jpg}_slit.jpg"
     if [ "$ORIENTATION" == "horizontal" ]; then
         # Extract a horizontal slit
@@ -75,8 +78,9 @@ fi
 # Resize the final image to the desired width
 convert "$FINAL_IMAGE" -resize "$IMAGE_WIDTH"x "$FINAL_IMAGE"
 
-# Clean up frames if needed
-# rm "$OUTPUT_DIR"/frame_*.jpg
+# Clean up frames
+rm -rf "$OUTPUT_DIR"
 
 echo "Slit-scan image created as $FINAL_IMAGE"
+
 
